@@ -1,7 +1,11 @@
+import os
+import tempfile
+
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
-from app.extractor import _quality_sort_key, get_video_info
+from app.extractor import _quality_sort_key, download_video, get_video_info
 
 app = FastAPI(title="Universal Video Downloader API")
 
@@ -93,6 +97,21 @@ def download(url: str = Query(..., description="Download karne ke liye video URL
         raise
     except Exception as e:
         raise HTTPException(422, f"Download link nahi bana: {str(e)[:150]}")
+
+
+@app.get("/api/download-file")
+def download_file(url: str = Query(..., description="Actual video file download karne ke liye URL"), quality: str | None = Query(None, description="Optional: 360p, 480p, 720p, 1080p")):
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "Galat URL. http:// ya https:// se shuru hona chahiye.")
+
+    temp_dir = tempfile.mkdtemp(prefix="video_download_")
+    try:
+        downloaded_path = download_video(url, output_dir=temp_dir, quality=quality)
+        if not os.path.exists(downloaded_path):
+            raise FileNotFoundError("Downloaded file not found")
+        return FileResponse(path=downloaded_path, filename=os.path.basename(downloaded_path), media_type="application/octet-stream")
+    except Exception as exc:
+        raise HTTPException(422, f"Video download fail hua: {str(exc)[:150]}")
 
 
 if __name__ == "__main__":

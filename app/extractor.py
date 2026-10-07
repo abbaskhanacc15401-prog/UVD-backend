@@ -1,3 +1,4 @@
+import os
 import re
 
 import yt_dlp
@@ -29,6 +30,38 @@ def _quality_sort_key(value):
     return 0
 
 
+def _resolve_quality_label(format_item):
+    for key in ("quality_label", "resolution", "format_note", "quality"):
+        value = format_item.get(key)
+        if value:
+            text = str(value).strip()
+            if text.lower() not in {"n/a", "unknown"}:
+                return text
+
+    height = format_item.get("height")
+    if isinstance(height, (int, float)) and height > 0:
+        return f"{int(height)}p"
+
+    width = format_item.get("width")
+    if isinstance(width, (int, float)) and width > 0:
+        return f"{int(width)}p"
+
+    return "N/A"
+
+
+def _select_download_format(formats, preferred_quality: str | None = None):
+    if not formats:
+        return None
+
+    if preferred_quality:
+        preferred = preferred_quality.lower()
+        matches = [f for f in formats if preferred in str(f.get("quality", "")).lower()]
+        if matches:
+            return max(matches, key=lambda item: _quality_sort_key(item.get("quality")))
+
+    return max(formats, key=lambda item: _quality_sort_key(item.get("quality")))
+
+
 def _filter_formats(formats):
     filtered = []
     seen = set()
@@ -49,7 +82,7 @@ def _filter_formats(formats):
         if ext and ext not in {"mp4", "webm", "m4a"}:
             continue
 
-        quality = f.get("resolution") or f.get("format_note") or "N/A"
+        quality = _resolve_quality_label(f)
         quality_key = str(quality).lower()
         if not quality_key or quality_key == "n/a":
             continue
@@ -90,6 +123,60 @@ def _filter_formats(formats):
             break
 
     return limited
+
+
+def _build_download_format_candidates(quality: str | None = None):
+    candidates = [
+        "best[ext=mp4]/best",
+        "bestvideo+bestaudio/best",
+        "bestvideo+bestaudio",
+        "best",
+    ]
+
+    if quality:
+        parsed = _quality_sort_key(quality)
+        if parsed:
+            candidates = [
+                f"best[height<={parsed}][ext=mp4]/best[height<={parsed}]/best",
+                f"best[height<={parsed}]/best",
+                f"bestvideo[height<={parsed}][ext=mp4]+bestaudio[ext=m4a]/best[height<={parsed}]/best",
+                *candidates,
+            ]
+
+    deduped = []
+    seen = set()
+    for item in candidates:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return deduped
+
+
+def download_video(url: str, output_dir: str = ".", quality: str | None = None, progress_hook=None):
+    os.makedirs(output_dir, exist_ok=True)
+
+    last_error = None
+    for candidate in _build_download_format_candidates(quality):
+        options = {
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "format": candidate,
+            "outtmpl": os.path.join(output_dir, "%(title)s.%(ext)s"),
+            "progress_hooks": [progress_hook] if progress_hook else [],
+            "merge_output_format": "mp4",
+        }
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=True)
+            title = (info or {}).get("title") or "video"
+            ext = (info or {}).get("ext") or "mp4"
+            return os.path.join(output_dir, f"{title}.{ext}")
+        except Exception as exc:  # pragma: no cover - fallback path for real network errors
+            last_error = exc
+            continue
+
+    raise last_error or RuntimeError("No working download format found for this video")
 
 
 def get_video_info(url: str):
