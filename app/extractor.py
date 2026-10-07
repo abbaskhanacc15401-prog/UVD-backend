@@ -4,6 +4,47 @@ import re
 import yt_dlp
 
 
+def _build_ytdlp_options(client: str | None = None, *, download: bool = False):
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "skip_download": not download,
+        "retries": 2,
+        "socket_timeout": 20,
+        "extractor_args": {},
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    }
+
+    if client and client != "default":
+        options["extractor_args"] = {"youtube": [f"player_client={client}"]}
+
+    return options
+
+
+def _extract_with_fallbacks(url: str, *, download: bool = False):
+    last_error = None
+    for client in ["default", "web", "android", "mweb", "tv_embedded"]:
+        try:
+            options = _build_ytdlp_options(client, download=download)
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=download)
+            if isinstance(info, dict) and info.get("title"):
+                return info
+            if isinstance(info, list) and info:
+                return info[0]
+            if info is not None:
+                return info
+        except Exception as exc:  # pragma: no cover - fallback path for real network failures
+            last_error = exc
+            continue
+
+    raise last_error or RuntimeError("Could not extract video metadata")
+
+
 def _quality_sort_key(value):
     if not value:
         return 0
@@ -165,6 +206,12 @@ def download_video(url: str, output_dir: str = ".", quality: str | None = None, 
             "outtmpl": os.path.join(output_dir, "%(title)s.%(ext)s"),
             "progress_hooks": [progress_hook] if progress_hook else [],
             "merge_output_format": "mp4",
+            "socket_timeout": 20,
+            "retries": 2,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         }
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
@@ -184,23 +231,18 @@ def get_video_info(url: str):
     URL se video ki info nikalta hai bina download kiye.
     Returns: title, thumbnail, duration, formats (download links)
     """
-    options = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
+    info = _extract_with_fallbacks(url, download=False)
+    if not isinstance(info, dict):
+        raise RuntimeError("Could not extract video metadata")
+
+    filtered_formats = _filter_formats(info.get("formats", []))
+
+    return {
+        "title": info.get("title"),
+        "thumbnail": info.get("thumbnail"),
+        "duration_sec": info.get("duration"),
+        "website": info.get("extractor_key"),
+        "best_format": filtered_formats[0] if filtered_formats else None,
+        "top_formats": filtered_formats[:5],
+        "formats": filtered_formats,
     }
-
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(url, download=False)
-
-        filtered_formats = _filter_formats(info.get("formats", []))
-
-        return {
-            "title": info.get("title"),
-            "thumbnail": info.get("thumbnail"),
-            "duration_sec": info.get("duration"),
-            "website": info.get("extractor_key"),
-            "best_format": filtered_formats[0] if filtered_formats else None,
-            "top_formats": filtered_formats[:5],
-            "formats": filtered_formats,
-        }

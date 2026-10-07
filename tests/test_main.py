@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+from app import extractor
 from app.extractor import _filter_formats, _select_download_format
 
 
@@ -45,6 +47,31 @@ class ExtractorFormatFilterTests(unittest.TestCase):
         self.assertTrue(filtered)
         self.assertEqual(filtered[0]["quality"], "1080p")
         self.assertEqual(filtered[0]["download_url"], "u1")
+
+    def test_extract_with_fallbacks_tries_multiple_youtube_clients(self):
+        fake_calls = []
+
+        class FakeYDL:
+            def __init__(self, options):
+                fake_calls.append(options)
+                self.options = options
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def extract_info(self, url, download=False):
+                if self.options.get("extractor_args", {}).get("youtube") == ["player_client=web"]:
+                    raise RuntimeError("web client blocked")
+                return {"title": "demo", "formats": []}
+
+        with patch.object(extractor.yt_dlp, "YoutubeDL", side_effect=lambda options: FakeYDL(options)):
+            info = extractor._extract_with_fallbacks("https://example.com", download=False)
+
+        self.assertEqual(info["title"], "demo")
+        self.assertGreaterEqual(len(fake_calls), 2)
 
 
 if __name__ == "__main__":
