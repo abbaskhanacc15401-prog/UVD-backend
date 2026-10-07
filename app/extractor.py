@@ -103,6 +103,19 @@ def _select_download_format(formats, preferred_quality: str | None = None):
     return max(formats, key=lambda item: _quality_sort_key(item.get("quality")))
 
 
+def _get_format_type(format_item):
+    vcodec = (format_item.get("vcodec") or "none").lower()
+    acodec = (format_item.get("acodec") or "none").lower()
+
+    if vcodec == "none" and acodec != "none":
+        return "audio-only"
+    if vcodec != "none" and acodec != "none":
+        return "video+audio"
+    if vcodec != "none" and acodec == "none":
+        return "video-only"
+    return "unknown"
+
+
 def _filter_formats(formats):
     filtered = []
     seen = set()
@@ -114,9 +127,9 @@ def _filter_formats(formats):
             continue
         if f.get("ext") in {"mhtml", "unknown"}:
             continue
-        if f.get("vcodec") == "none" and f.get("acodec") == "none":
-            continue
-        if f.get("vcodec") == "none" and f.get("acodec") != "none":
+
+        format_type = _get_format_type(f)
+        if format_type == "unknown":
             continue
 
         ext = (f.get("ext") or "").lower()
@@ -133,7 +146,7 @@ def _filter_formats(formats):
         if score < 240 and quality_key not in {"tiny", "small", "medium", "large", "hd720", "hd1080"}:
             continue
 
-        dedupe_key = (quality_key, ext)
+        dedupe_key = (quality_key, ext, format_type)
         if dedupe_key in seen:
             continue
 
@@ -145,7 +158,8 @@ def _filter_formats(formats):
                 "ext": ext or f.get("ext"),
                 "filesize_mb": round(f["filesize"] / 1024 / 1024, 2) if f.get("filesize") else None,
                 "download_url": f["url"],
-                "type": "video+audio" if f.get("vcodec") != "none" and f.get("acodec") != "none" else "video-only",
+                "audio_url": f.get("audio_url") or (f["url"] if format_type == "audio-only" else None),
+                "type": format_type,
             }
         )
 

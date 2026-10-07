@@ -48,6 +48,18 @@ class ExtractorFormatFilterTests(unittest.TestCase):
         self.assertEqual(filtered[0]["quality"], "1080p")
         self.assertEqual(filtered[0]["download_url"], "u1")
 
+    def test_keeps_audio_only_formats_for_direct_audio_downloads(self):
+        formats = [
+            {"format_id": "251", "ext": "webm", "url": "audio-url", "vcodec": "none", "acodec": "opus", "format_note": "tiny"},
+            {"format_id": "248", "ext": "mp4", "url": "video-url", "vcodec": "avc1", "acodec": "mp4a", "height": 1080},
+        ]
+
+        filtered = _filter_formats(formats)
+
+        audio_items = [item for item in filtered if item["type"] == "audio-only"]
+        self.assertTrue(audio_items)
+        self.assertEqual(audio_items[0]["download_url"], "audio-url")
+
     def test_extract_with_fallbacks_tries_multiple_youtube_clients(self):
         fake_calls = []
 

@@ -38,6 +38,7 @@ def _build_mobile_payload(info, selected):
             "ext": item.get("ext"),
             "format_id": item.get("format_id"),
             "download_url": item.get("download_url"),
+            "audio_url": item.get("audio_url"),
             "type": item.get("type"),
         })
 
@@ -50,6 +51,7 @@ def _build_mobile_payload(info, selected):
         "selected_quality": selected.get("quality") if selected else None,
         "selected_ext": selected.get("ext") if selected else None,
         "download_url": selected.get("download_url") if selected else None,
+        "audio_url": selected.get("audio_url") if selected else None,
         "format_id": selected.get("format_id") if selected else None,
         "best_format": selected,
         "formats": formats,
