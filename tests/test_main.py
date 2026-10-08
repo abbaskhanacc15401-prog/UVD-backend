@@ -126,3 +126,23 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, b"mp4-data")
         self.assertTrue(response.headers["content-type"].startswith("video/mp4"))
+
+
+class RailwayStartupTests(unittest.TestCase):
+    @patch("app.__main__.uvicorn.run")
+    def test_uses_railway_port_environment_variable(self, run_server):
+        from app.__main__ import main
+
+        with patch.dict("os.environ", {"PORT": "8123"}):
+            main()
+
+        run_server.assert_called_once_with("app.main:app", host="0.0.0.0", port=8123)
+
+    @patch("app.__main__.uvicorn.run")
+    def test_defaults_to_port_8000_outside_railway(self, run_server):
+        from app.__main__ import main
+
+        with patch.dict("os.environ", {}, clear=True):
+            main()
+
+        run_server.assert_called_once_with("app.main:app", host="0.0.0.0", port=8000)
