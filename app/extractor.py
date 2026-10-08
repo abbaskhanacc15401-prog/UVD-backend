@@ -1,262 +1,227 @@
 import os
 import re
+from pathlib import Path
+from typing import Any
 
 import yt_dlp
 
 
-def _build_ytdlp_options(client: str | None = None, *, download: bool = False):
-    options = {
+def _build_ytdlp_options(client: str | None = None, *, download: bool = False) -> dict[str, Any]:
+    options: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": not download,
         "retries": 2,
         "socket_timeout": 20,
-        "extractor_args": {},
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
     }
-
     if client and client != "default":
         options["extractor_args"] = {"youtube": [f"player_client={client}"]}
-
     return options
 
 
-def _extract_with_fallbacks(url: str, *, download: bool = False):
-    last_error = None
-    for client in ["default", "web", "android", "mweb", "tv_embedded"]:
+def _extract_with_fallbacks(url: str, *, download: bool = False) -> dict[str, Any]:
+    last_error: Exception | None = None
+    for client in ("default", "web", "android", "mweb", "tv_embedded"):
         try:
-            options = _build_ytdlp_options(client, download=download)
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(_build_ytdlp_options(client, download=download)) as ydl:
                 info = ydl.extract_info(url, download=download)
-            if isinstance(info, dict) and info.get("title"):
+            if isinstance(info, list):
+                info = info[0] if info else None
+            if isinstance(info, dict):
                 return info
-            if isinstance(info, list) and info:
-                return info[0]
-            if info is not None:
-                return info
-        except Exception as exc:  # pragma: no cover - fallback path for real network failures
+        except Exception as exc:
             last_error = exc
-            continue
 
-    raise last_error or RuntimeError("Could not extract video metadata")
+    raise last_error or RuntimeError("Video metadata could not be extracted")
 
 
-def _quality_sort_key(value):
+def _quality_sort_key(value: Any) -> int:
     if not value:
         return 0
-
-    match = re.search(r"(\d{3,4})p", str(value), re.IGNORECASE)
+    text = str(value)
+    match = re.search(r"(\d{3,4})p", text, re.IGNORECASE)
     if match:
         return int(match.group(1))
-
-    match = re.search(r"(\d+)x(\d+)", str(value), re.IGNORECASE)
+    match = re.search(r"(\d+)x(\d+)", text, re.IGNORECASE)
     if match:
         return max(int(match.group(1)), int(match.group(2)))
-
-    if str(value).lower() in {"tiny", "small", "medium", "large", "hd720", "hd1080"}:
-        mapping = {
-            "tiny": 144,
-            "small": 360,
-            "medium": 480,
-            "large": 720,
-            "hd720": 720,
-            "hd1080": 1080,
-        }
-        return mapping.get(str(value).lower(), 0)
-
-    return 0
+    return {
+        "tiny": 144,
+        "small": 360,
+        "medium": 480,
+        "large": 720,
+        "hd720": 720,
+        "hd1080": 1080,
+    }.get(text.lower(), 0)
 
 
-def _resolve_quality_label(format_item):
-    for key in ("quality_label", "resolution", "format_note", "quality"):
-        value = format_item.get(key)
-        if value:
-            text = str(value).strip()
-            if text.lower() not in {"n/a", "unknown"}:
-                return text
-
-    height = format_item.get("height")
+def _resolve_quality_label(item: dict[str, Any]) -> str:
+    height = item.get("height")
     if isinstance(height, (int, float)) and height > 0:
         return f"{int(height)}p"
-
-    width = format_item.get("width")
-    if isinstance(width, (int, float)) and width > 0:
-        return f"{int(width)}p"
-
+    for key in ("quality_label", "resolution", "format_note", "quality"):
+        value = item.get(key)
+        if value and str(value).lower() not in {"n/a", "unknown"}:
+            return str(value).strip()
     return "N/A"
 
 
-def _select_download_format(formats, preferred_quality: str | None = None):
-    if not formats:
-        return None
-
-    if preferred_quality:
-        preferred = preferred_quality.lower()
-        matches = [f for f in formats if preferred in str(f.get("quality", "")).lower()]
-        if matches:
-            return max(matches, key=lambda item: _quality_sort_key(item.get("quality")))
-
-    return max(formats, key=lambda item: _quality_sort_key(item.get("quality")))
-
-
-def _get_format_type(format_item):
-    vcodec = (format_item.get("vcodec") or "none").lower()
-    acodec = (format_item.get("acodec") or "none").lower()
-
-    if vcodec == "none" and acodec != "none":
-        return "audio-only"
-    if vcodec != "none" and acodec != "none":
+def _get_format_type(item: dict[str, Any]) -> str:
+    video = str(item.get("vcodec") or "none").lower() != "none"
+    audio = str(item.get("acodec") or "none").lower() != "none"
+    if video and audio:
         return "video+audio"
-    if vcodec != "none" and acodec == "none":
+    if video:
         return "video-only"
+    if audio:
+        return "audio-only"
     return "unknown"
 
 
-def _filter_formats(formats):
-    filtered = []
-    seen = set()
+def _filter_formats(formats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    video_formats: list[dict[str, Any]] = []
+    audio_formats: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
 
-    for f in formats:
-        if not f.get("url"):
+    for item in formats:
+        source_url = item.get("url")
+        format_id = item.get("format_id")
+        ext = str(item.get("ext") or "").lower()
+        kind = _get_format_type(item)
+        if not source_url or not format_id or str(format_id).startswith("sb"):
             continue
-        if f.get("format_id", "").startswith("sb"):
-            continue
-        if f.get("ext") in {"mhtml", "unknown"}:
-            continue
-
-        format_type = _get_format_type(f)
-        if format_type == "unknown":
-            continue
-
-        ext = (f.get("ext") or "").lower()
-        if ext and ext not in {"mp4", "webm", "m4a"}:
+        if ext not in {"mp4", "webm", "m4a"} or kind == "unknown":
             continue
 
-        quality = _resolve_quality_label(f)
-        quality_key = str(quality).lower()
-        if not quality_key or quality_key == "n/a":
+        quality = _resolve_quality_label(item)
+        if kind != "audio-only" and _quality_sort_key(quality) < 240:
             continue
+        if quality == "N/A":
+            quality = "audio" if kind == "audio-only" else quality
 
-        # Remove duplicate stream variants and keep only practical quality buckets.
-        score = _quality_sort_key(quality)
-        if score < 240 and quality_key not in {"tiny", "small", "medium", "large", "hd720", "hd1080"}:
+        key = (quality.lower(), ext, kind)
+        if key in seen:
             continue
+        seen.add(key)
 
-        dedupe_key = (quality_key, ext, format_type)
-        if dedupe_key in seen:
-            continue
-
-        seen.add(dedupe_key)
-        filtered.append(
-            {
-                "format_id": f["format_id"],
-                "quality": quality,
-                "ext": ext or f.get("ext"),
-                "filesize_mb": round(f["filesize"] / 1024 / 1024, 2) if f.get("filesize") else None,
-                "download_url": f["url"],
-                "audio_url": f.get("audio_url") or (f["url"] if format_type == "audio-only" else None),
-                "type": format_type,
-            }
-        )
-
-    filtered.sort(key=lambda x: _quality_sort_key(x["quality"]), reverse=True)
-
-    # Keep response compact and mobile-useful instead of every single yt-dlp variant.
-    limited = []
-    seen_qualities = set()
-    for item in filtered:
-        q = str(item["quality"]).lower()
-        if q in seen_qualities:
-            continue
-        seen_qualities.add(q)
-        limited.append(item)
-        if len(limited) >= 8:
-            break
-
-    return limited
-
-
-def _build_download_format_candidates(quality: str | None = None):
-    candidates = [
-        "best[ext=mp4]/best",
-        "bestvideo+bestaudio/best",
-        "bestvideo+bestaudio",
-        "best",
-    ]
-
-    if quality:
-        parsed = _quality_sort_key(quality)
-        if parsed:
-            candidates = [
-                f"best[height<={parsed}][ext=mp4]/best[height<={parsed}]/best",
-                f"best[height<={parsed}]/best",
-                f"bestvideo[height<={parsed}][ext=mp4]+bestaudio[ext=m4a]/best[height<={parsed}]/best",
-                *candidates,
-            ]
-
-    deduped = []
-    seen = set()
-    for item in candidates:
-        if item not in seen:
-            seen.add(item)
-            deduped.append(item)
-    return deduped
-
-
-def download_video(url: str, output_dir: str = ".", quality: str | None = None, progress_hook=None):
-    os.makedirs(output_dir, exist_ok=True)
-
-    last_error = None
-    for candidate in _build_download_format_candidates(quality):
-        options = {
-            "noplaylist": True,
-            "quiet": True,
-            "no_warnings": True,
-            "format": candidate,
-            "outtmpl": os.path.join(output_dir, "%(title)s.%(ext)s"),
-            "progress_hooks": [progress_hook] if progress_hook else [],
-            "merge_output_format": "mp4",
-            "socket_timeout": 20,
-            "retries": 2,
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
+        entry = {
+            "format_id": str(format_id),
+            "quality": quality,
+            "ext": ext,
+            "abr": item.get("abr") or 0,
+            "filesize_mb": round(item["filesize"] / 1024 / 1024, 2)
+            if item.get("filesize")
+            else None,
+            "source_url": source_url,
+            "type": kind,
         }
-        try:
-            with yt_dlp.YoutubeDL(options) as ydl:
-                info = ydl.extract_info(url, download=True)
-            title = (info or {}).get("title") or "video"
-            ext = (info or {}).get("ext") or "mp4"
-            return os.path.join(output_dir, f"{title}.{ext}")
-        except Exception as exc:  # pragma: no cover - fallback path for real network errors
-            last_error = exc
-            continue
+        (audio_formats if kind == "audio-only" else video_formats).append(entry)
 
-    raise last_error or RuntimeError("No working download format found for this video")
+    video_formats.sort(key=lambda entry: _quality_sort_key(entry["quality"]), reverse=True)
+    audio_formats.sort(key=lambda entry: entry["abr"], reverse=True)
+    return video_formats[:8] + audio_formats[:3]
 
 
-def get_video_info(url: str):
-    """
-    URL se video ki info nikalta hai bina download kiye.
-    Returns: title, thumbnail, duration, formats (download links)
-    """
-    info = _extract_with_fallbacks(url, download=False)
+def _select_download_format(
+    formats: list[dict[str, Any]], preferred_quality: str | None = None
+) -> dict[str, Any] | None:
+    video_formats = [item for item in formats if item.get("type") != "audio-only"]
+    if not video_formats:
+        return None
+    if preferred_quality:
+        preferred = preferred_quality.strip().lower()
+        exact_matches = [
+            item for item in video_formats if str(item.get("quality", "")).lower() == preferred
+        ]
+        if exact_matches:
+            return exact_matches[0]
+        requested_height = _quality_sort_key(preferred)
+        if requested_height:
+            at_or_below = [
+                item
+                for item in video_formats
+                if _quality_sort_key(item.get("quality")) <= requested_height
+            ]
+            if at_or_below:
+                return max(at_or_below, key=lambda item: _quality_sort_key(item["quality"]))
+    return max(video_formats, key=lambda item: _quality_sort_key(item.get("quality")))
+
+
+def _download_options(
+    output_dir: Path,
+    *,
+    quality: str | None = None,
+    format_id: str | None = None,
+    kind: str = "video",
+) -> dict[str, Any]:
+    options: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "retries": 2,
+        "socket_timeout": 20,
+        "outtmpl": str(output_dir / "%(id)s.%(ext)s"),
+    }
+    if kind == "audio":
+        if not format_id:
+            raise ValueError("Audio download requires a format ID")
+        options["format"] = format_id
+    else:
+        height = _quality_sort_key(quality) if quality else 0
+        cap = f"[height<={height}]" if height else ""
+        options["format"] = (
+            f"bestvideo{cap}[ext=mp4]+bestaudio[ext=m4a]/"
+            f"best{cap}[ext=mp4]"
+        )
+        options["merge_output_format"] = "mp4"
+    return options
+
+
+def download_media(
+    url: str,
+    output_dir: str,
+    *,
+    quality: str | None = None,
+    format_id: str | None = None,
+    kind: str = "video",
+) -> tuple[str, str]:
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    if kind == "audio":
+        audio_formats = [
+            item
+            for item in get_video_info(url)["formats"]
+            if item["type"] == "audio-only"
+        ]
+        if not any(item["format_id"] == format_id for item in audio_formats):
+            raise ValueError("The requested audio format is not available for this media")
+    options = _download_options(directory, quality=quality, format_id=format_id, kind=kind)
+
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=True)
+
     if not isinstance(info, dict):
-        raise RuntimeError("Could not extract video metadata")
+        raise RuntimeError("Downloaded file information is unavailable")
+    filepath = info.get("filepath")
+    if not filepath:
+        filepath = next(
+            (str(path) for path in directory.iterdir() if path.is_file()),
+            None,
+        )
+    if not filepath or not os.path.isfile(filepath):
+        raise FileNotFoundError("Downloaded file was not created")
+    filename = Path(filepath).name
+    return filepath, filename
 
-    filtered_formats = _filter_formats(info.get("formats", []))
 
+def get_video_info(url: str) -> dict[str, Any]:
+    info = _extract_with_fallbacks(url)
+    formats = _filter_formats(info.get("formats") or [])
     return {
-        "title": info.get("title"),
+        "title": info.get("title") or "Video",
         "thumbnail": info.get("thumbnail"),
         "duration_sec": info.get("duration"),
         "website": info.get("extractor_key"),
-        "best_format": filtered_formats[0] if filtered_formats else None,
-        "top_formats": filtered_formats[:5],
-        "formats": filtered_formats,
+        "formats": formats,
     }

@@ -1,4 +1,4 @@
 fastapi==0.115.0
-uvicorn==0.32.0
-yt-dlp==2025.8.11
-python-multipart==0.0.20
+uvicorn[standard]==0.32.0
+yt-dlp[default]==2026.8.19
+httpx==0.28.1

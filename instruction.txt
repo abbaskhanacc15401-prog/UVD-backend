@@ -1,85 +1,99 @@
-Integrate the Android app with the FastAPI backend using Retrofit and Gson.
+BACKEND VIDEO/AUDIO DOWNLOAD - ROMAN URDU GUIDE
 
-Requirements:
-- Add INTERNET permission in AndroidManifest.xml.
-- Add storage permission if file download needs it on Android 10+.
-- Add dependencies in app/build.gradle:
-  implementation "com.squareup.retrofit2:retrofit:2.11.0"
-  implementation "com.squareup.retrofit2:converter-gson:2.11.0"
-  implementation "com.google.code.gson:gson:2.10.1"
-  implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
+Maqsad
+------
+Yeh FastAPI backend app ko video ki available resolutions aur audio-only download links deta hai. Video download backend par MP4 mein merge hota hai, is liye video aur audio alag streams hon to app ko FFmpeg merge karne ki zaroorat nahin.
+Sirf aisa content download karein jiske liye aap ke paas haq ya ijazat ho. Kisi platform ki terms aur local qawaneen ka khayal rakhein.
 
-Backend URL:
-- Use local test URL: http://192.168.42.53:8000/
-- For Android emulator: http://10.0.2.2:8000/
-- Later replace with hosted production backend URL when ready.
+1. Zaroori software
+-------------------
+- Python 3.10 ya naya
+- FFmpeg (PATH mein ffmpeg command accessible ho) - alag video/audio streams ko MP4 banane ke liye lazmi
+- Git (optional)
 
-Create model classes:
-- DownloadResponse with fields:
-  success: Boolean
-  title: String
-  thumbnail: String?
-  duration_sec: Int?
-  selected_quality: String?
-  selected_ext: String?
-  download_url: String?
-  audio_url: String?
-  format_id: String?
-  formats: List<FormatItem>
-- FormatItem with fields:
-  quality: String?
-  ext: String?
-  format_id: String?
-  download_url: String?
-  audio_url: String?
-  type: String?
+2. Windows par backend chalana
+------------------------------
+PowerShell mein backend folder kholen:
 
-Create API interface:
-- GET /api/download
-- Query params: url and optional quality
-- suspend fun getDownloadLink(@Query("url") url: String, @Query("quality") quality: String? = null): DownloadResponse
+    cd D:\fro\backend
+    py -m venv .venv
+    .\.venv\Scripts\python -m pip install -r requirements.txt
+    .\.venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-Create Retrofit client:
-- baseUrl = "http://192.168.42.53:8000/"
-- add Gson converter factory
-- build Retrofit and create ApiService
+FFmpeg pehle se install ho aur PATH mein ho. Install karne ke baad naya PowerShell kholen.
+Agar YouTube "content is not available on this app" error aaye to backend band karke
+requirements dobara install karein, phir backend restart karein:
 
-Download manager:
-- Use Android DownloadManager for file storage
-- Save downloaded file into Environment.DIRECTORY_DOWNLOADS
-- Use a safe file name from video title
-- Handle MIME type based on extension
-- Return downloadId for tracking
+    .\.venv\Scripts\python -m pip install -r requirements.txt
 
-Audio-only download handling:
-- If response.audio_url is not null, allow direct audio download
-- Use audio URL for mp3, m4a, or webm depending on backend response
-- Use proper MIME type mapping
+Local PC par status: http://127.0.0.1:8000/
+PC video test app: http://127.0.0.1:8000/
+API documentation: http://127.0.0.1:8000/docs
 
-Video-only + audio fallback:
-- If response has a video stream without audio, and audio_url is available separately, use a fallback merge strategy
-- Prefer FFmpeg or MediaMuxer for real MP4 muxing
-- If FFmpeg is unavailable, use a simple fallback copy only as last resort
+Browser test app mein URL aur optional quality dain, "Check formats" dabayein,
+phir format ke samne Download button dabayein. Download browser ke Downloads
+folder mein nazar aayega. Download file backend se aati hai.
 
-MainActivity example:
-- Call RetrofitClient.api.getDownloadLink(url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ", quality = "720p")
-- If response.success and response.download_url != null, start direct MP4 download
-- Else if response.audio_url != null, start audio-only download
-- Else if video-only stream plus audio_url exists, trigger merge fallback
-- Log the result and show error if no valid URL is returned
+3. App se API call
+------------------
+Extract aur available download links:
 
-Important behavior:
-- Use the backend `download_url` for direct MP4 files whenever available.
-- Use `audio_url` for direct audio downloads.
-- Use `formats` list to choose the desired quality.
-- For local testing, run backend with:
-  cd d:\fro\backend
-  .\.venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-- Test API with:
-  http://192.168.42.53:8000/api/download?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ&quality=720p
+    GET http://<BACKEND-IP>:8000/api/download?url=<ENCODED_VIDEO_URL>
 
-Final goal:
-- App should download MP4 directly when backend returns a full video+audio stream.
-- App should download audio-only when backend returns audio-only stream.
-- App should support fallback merge for video-only + audio stream combinations.
-- Before production, replace the local base URL with the hosted backend URL.
+Quality mangne ka misaal:
+
+    GET http://<BACKEND-IP>:8000/api/download?url=<ENCODED_VIDEO_URL>&quality=720p
+
+URL parameter ko app mein URL-encode karein. Android emulator ke liye base URL:
+
+    http://10.0.2.2:8000/
+
+Physical Android phone par base URL PC ka local Wi-Fi IPv4 address ho, misal:
+
+    http://192.168.1.25:8000/
+
+Phone aur PC aik hi Wi-Fi par hon aur Windows Firewall TCP port 8000 allow kare.
+
+4. JSON response
+----------------
+Response mein title, thumbnail, duration_sec, selected_quality, selected_ext, download_url, audio_url aur formats hotay hain.
+
+- download_url: MP4 file ko backend se download karne ka link. Android DownloadManager ko yahi link dein.
+- audio_url: audio-only file download karne ka link. Iska extension source format ke mutabiq m4a ya webm ho sakta hai; har audio stream MP3 nahin hoti.
+- formats: available video qualities ke saath audio-only formats bhi.
+- format item ka type video+audio, video-only, ya audio-only ho sakta hai.
+
+Download karne ke links kuch waqt baad expire ho sakte hain; zaroorat par /api/download dobara call karein.
+Video quality ka link MP4 return karta hai. Is ke liye FFmpeg server par chahiye.
+
+5. Android integration
+----------------------
+AndroidManifest.xml mein yeh permission add karein:
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+Retrofit/Gson dependencies:
+
+    implementation "com.squareup.retrofit2:retrofit:2.11.0"
+    implementation "com.squareup.retrofit2:converter-gson:2.11.0"
+
+API interface ko GET api/download ke saath url aur optional quality query bhejni chahiye.
+Response mein download_url aaye to usay DownloadManager se download karein. Audio ke liye audio_url use karein.
+Production mein base URL ko HTTPS par deployed backend domain se badlein; cleartext HTTP ko production mein on na karein.
+
+6. Configuration aur deployment
+-------------------------------
+CORS_ORIGINS environment variable mein web app ke origins comma-separated dein. Misal:
+
+    $env:CORS_ORIGINS="https://app.example.com"
+
+Android native app ke liye CORS aam tor par zaroori nahin.
+Production mein HTTPS reverse proxy, request rate limit, monitoring aur hosting resource limits set karein.
+Backend ko internet par khulasa karne se pehle authentication/rate limiting lagayein. Random public URL par service na chalayein.
+
+7. Error check
+--------------
+- 400: URL ghalat, local/private IP, ya supported scheme nahin.
+- 422: provider ne media info/download reject kiya, ya FFmpeg/format masla.
+- /docs par endpoint request aur JSON response check karein.
+- App mein HTTP error body aur network exception log karein; real production credentials/logs share na karein.

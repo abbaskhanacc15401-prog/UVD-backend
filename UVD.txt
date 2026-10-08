@@ -1,0 +1,214 @@
+`  UVD ANDROID APP KO LOCAL BACKEND SE CONNECT KARNA
+=================================================
+
+Yeh guide Windows PC par chalne wale UVD backend ko Android app se connect aur test karne ke liye hai.
+Sirf us video ko test/download karein jiske liye aap ke paas ijazat ho.
+
+1. PC par backend start karein
+------------------------------
+PowerShell kholen aur poori command ek hi line mein chalayein:
+
+    D:\fro\backend\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir D:\fro\backend --host 0.0.0.0 --port 8001
+
+Terminal ko khula rehne dein. "Uvicorn running on http://0.0.0.0:8001" dikhna chahiye.
+Agar "address already in use" aaye to port 8001 pehle se use ho raha hai; doosra port, misal 8002, chun kar neeche diye URLs mein bhi 8001 ko 8002 se badlein.
+
+PC browser mein yeh URLs khol kar jaanchein:
+
+    http://127.0.0.1:8001/api/health
+    http://127.0.0.1:8001/
+
+Pehle URL par backend health JSON aur doosre par Video Download Tester page aana chahiye.
+
+2. Android app ke liye sahi backend address
+-------------------------------------------
+
+Android emulator (Android Studio):
+
+    http://10.0.2.2:8001/
+
+10.0.2.2 emulator ke andar se aapke PC ke localhost ko refer karta hai. Emulator app mein 127.0.0.1 na likhein.
+
+Asli Android phone:
+
+    http://PC-LOCAL-IP:8001/
+
+PC ka Wi-Fi IPv4 address PowerShell ke `ipconfig` output se dekhein, misal `192.168.1.25`. Phir app ka base URL:
+
+    http://192.168.1.25:8001/
+
+Phone aur PC aik hi Wi-Fi network par hon. Zaroorat par Windows Firewall mein private network ke liye Python/Uvicorn ka TCP port 8001 allow karein. Backend ko public internet par expose na karein.
+
+3. Android permission aur local HTTP
+------------------------------------
+AndroidManifest.xml mein INTERNET permission add karein:
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+Local HTTP testing ke liye debug app ke `<application>` tag mein:
+
+    android:usesCleartextTraffic="true"
+
+Sirf local debug/testing mein HTTP use karein. Release/production ke liye HTTPS backend use karein aur cleartext permission hata dein.
+
+4. Retrofit dependencies
+------------------------
+App ke module-level build.gradle dependencies mein:
+
+    implementation "com.squareup.retrofit2:retrofit:2.11.0"
+    implementation "com.squareup.retrofit2:converter-gson:2.11.0"
+
+Gradle sync karein. Agar app coroutines/lifecycleScope use karti hai to us project ke mutabiq coroutine dependency bhi add karein.
+
+5. API models aur service
+-------------------------
+Kotlin model example:
+
+    data class DownloadResponse(
+        val success: Boolean,
+        val title: String,
+        val thumbnail: String?,
+        val duration_sec: Int?,
+        val selected_quality: String?,
+        val selected_ext: String?,
+        val download_url: String?,
+        val audio_url: String?,
+        val format_id: String?,
+        val formats: List<FormatItem>
+    )
+
+    data class FormatItem(
+        val quality: String?,
+        val ext: String?,
+        val format_id: String?,
+        val download_url: String?,
+        val audio_url: String?,
+        val type: String?,
+        val filesize_mb: Double?
+    )
+
+Retrofit API:
+
+    interface UvdApi {
+        @GET("api/download")
+        suspend fun getDownload(
+            @Query("url") videoUrl: String,
+            @Query("quality") quality: String? = null
+        ): DownloadResponse
+    }
+
+Retrofit client mein base URL device ke hisaab se rakhein:
+
+    private const val BASE_URL = "http://10.0.2.2:8001/"
+
+Asli phone ke liye `10.0.2.2` ko PC ke Wi-Fi IPv4 address se badlein.
+
+    val api: UvdApi = Retrofit.Builder()
+        .baseUrl(BASE_URL)
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
+        .create(UvdApi::class.java)
+
+6. Pehla connection test
+------------------------
+Pehle PC browser ya Android emulator browser mein health URL khol kar check karein:
+
+    http://10.0.2.2:8001/api/health
+
+Asli phone par `10.0.2.2` ki jagah PC ka Wi-Fi IPv4 address use karein.
+JSON mein `status` field backend ke chalne ki tasdeeq hai.
+
+App se format list mangwane ka example:
+
+    val result = UvdClient.api.getDownload(
+        videoUrl = "https://www.youtube.com/watch?v=7wnove7K-ZQ",
+        quality = "720p"
+    )
+
+`result.success` check karein. `result.formats` mein available qualities aur audio options hotay hain. Video ke liye `result.download_url` aur audio-only ke liye `result.audio_url` use karein. Har link backend se file response leta hai; is URL ko DownloadManager ya app download flow ko dein.
+
+7. App mein multiple download links dikhana
+-------------------------------------------
+Sirf `selected_quality` / `download_url` na dikhayein. `result.formats` ki poori list ko app mein list ya RecyclerView ki surat dikhayein. Har format ke liye alag button banayein:
+
+- `type` agar `audio-only` ho to audio label, `quality`, `ext` aur `audio_url` (ya `download_url`) dikhayein.
+- Baqi video formats ke liye `quality` (misal 1080p/720p/480p), MP4 label aur us item ka apna `download_url` dikhayein.
+- Button dabane par usi format item ke `download_url` ko DownloadManager mein enqueue karein; video link backend se MP4 file deta hai.
+- Audio button usi item ka `audio_url` use kare; agar woh null ho to item ka `download_url` use kare.
+- Link null/khali ho to button disable karke user ko message dikhayein. URL ko khud dobara na banayein.
+- Format title/quality ko download filename mein safe karein. DownloadManager ka ID dikhayein/log karein aur completion/error handle karein.
+- Nayi video ya quality query ke baad purani list clear karke `formats` response se dobara populate karein.
+
+Misaali UI:
+
+    1080p · MP4              [Download]
+    720p · MP4               [Download]
+    480p · MP4               [Download]
+    audio · m4a/webm         [Download audio]
+
+App banane wale coding agent ko yeh instruction copy/paste karein:
+
+    Android app mein UVD backend ki har available quality/audio ke multiple download links dikhayein.
+    GET /api/download ko url aur optional quality query ke saath Retrofit se call karein.
+    Response ke `formats` array ko RecyclerView ya LazyColumn mein render karein; har row mein
+    quality, ext/type aur apna Download button ho. Video rows ke liye us row ka `download_url`
+    (backend se MP4) aur audio-only row ke liye `audio_url` use karein; audio_url null ho to
+    download_url use karein. URL khud construct na karein. DownloadManager se file save karein,
+    safe filename/MIME type dein, download ID/progress/result dikhayein, errors user ko batayein.
+    INTERNET permission aur local debug HTTP configuration add karein. Emulator par base URL
+    http://10.0.2.2:8001/ rakhein; physical phone par PC ka Wi-Fi IP aur port 8001 use karein.
+    Health check GET /api/health se connection verify karein. Sirf pehla/selected link dikhane
+    ke bajaye tamam formats ke alag buttons dikhayein. Release build mein HTTPS backend use karein.
+
+8. Download test
+----------------
+App ko selected video format ke `download_url` se MP4 download karwayen. Android DownloadManager ka title/filename set karein aur download progress/result ID log karein. Audio test ke liye format item ka `audio_url` use karein; agar woh null ho to us item ka `download_url` use karein.
+
+Quality link video+audio streams ko backend par MP4 mein merge karta hai. Is feature ke liye PC/server par FFmpeg PATH mein installed hona chahiye. Audio format m4a/webm ho sakta hai; har audio stream MP3 nahin.
+
+9. Error ki jaanch
+------------------
+- Connection refused / failed to connect: Uvicorn terminal chal raha hai? Port sahi hai? Emulator par 10.0.2.2, phone par PC ka local IP use ho raha hai?
+- Phone se timeout: phone aur PC aik Wi-Fi par hon; Windows Firewall TCP port 8001 allow kare.
+- Android cleartext/HTTP error: debug manifest mein `usesCleartextTraffic="true"` check karein.
+- HTTP 400: URL ya input ghalat/restricted ho sakta hai.
+- HTTP 422: yt-dlp source video read/download nahin kar saka, ya MP4 merge ke liye FFmpeg nahin mila. Android Logcat aur Uvicorn terminal ka error dekhein.
+- YouTube/site access har video ke liye guaranteed nahin; private, DRM, login-required, ya unsupported videos fail ho sakte hain.
+- Links expire ho sakte hain; download se pehle `/api/download` ko dobara call karein.
+
+App native Android network requests ke liye CORS ki zaroorat nahin. Yeh local testing guide hai; deployed app ke liye HTTPS backend URL configure karein.
+
+10. App coding agent ke liye backend migration instruction
+----------------------------------------------------------
+Neeche ka task Android app ke coding agent ko dein:
+
+    Android app ko purane backend se hata kar is naye UVD FastAPI backend ke saath connect karein.
+    App ke source code mein purane backend ka BASE_URL, API service/routes, request/response models,
+    aur purane download-link handling ko dhoond kar naye API contract se replace karein. Sirf purani
+    backend integration/configuration hataein; app ke doosre features ya unrelated code ko delete na karein.
+
+    Local backend port 8001 par hai. Android Studio emulator ke liye Retrofit BASE_URL
+    `http://10.0.2.2:8001/` rakhein. Asli Android phone ke liye PC ka current Wi-Fi IPv4 address
+    use karein, misal `http://10.208.139.203:8001/`; yeh IP badal sakta hai, is liye app config mein
+    asaani se update honay wala rakhein. Android device se `localhost` ya `127.0.0.1` use na karein.
+    Backend PC par `--host 0.0.0.0 --port 8001` ke saath chalna chahiye.
+
+    Connection test `GET api/health` se karein. Formats ke liye
+    `GET api/download?url=<encoded-video-url>&quality=<optional-quality>` call karein.
+    Retrofit query parameters use karein, URL manually concatenate na karein. Response models
+    `success`, `title`, `thumbnail`, `duration_sec`, `selected_quality`, `selected_ext`,
+    `download_url`, `audio_url`, `format_id`, aur `formats` fields parse karein.
+
+    `formats` array ke har item ke liye alag quality/audio row aur download button dikhayein.
+    Video item ka apna `download_url` use karein; `audio-only` item ka `audio_url` use karein,
+    aur agar null ho to us item ka `download_url` use karein. Link ko app mein khud construct,
+    rewrite, ya purane backend domain se proxy na karein. Naya `download_url` backend ke
+    `api/download-file` endpoint ko call karta hai aur file response deta hai. DownloadManager se
+    save karein, progress aur errors user ko dikhayein. Video file MP4 hoti hai; audio ext
+    backend response ke mutabiq m4a/webm ho sakti hai.
+
+    AndroidManifest mein INTERNET permission rakhein. Sirf local debug build mein HTTP ki
+    zaroorat ho to debug manifest par cleartext traffic allow karein; release mein HTTPS use karein.
+    Android native app ke liye CORS config change karna zaroori nahin. Emulator aur physical device
+    dono par health check aur kam az kam aik authorized public video ka formats/download flow test
+    karein. Tests/build chala kar badle gaye app files aur actual BASE_URL ko report karein.
