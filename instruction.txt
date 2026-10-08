@@ -95,5 +95,6 @@ Backend ko internet par khulasa karne se pehle authentication/rate limiting laga
 --------------
 - 400: URL ghalat, local/private IP, ya supported scheme nahin.
 - 422: provider ne media info/download reject kiya, ya FFmpeg/format masla.
+- Railway par "ffmpeg is not installed" aaye to root Dockerfile wali latest revision deploy karein. Railway image rebuild/redeploy ke baad video download dobara test karein.
 - /docs par endpoint request aur JSON response check karein.
 - App mein HTTP error body aur network exception log karein; real production credentials/logs share na karein.

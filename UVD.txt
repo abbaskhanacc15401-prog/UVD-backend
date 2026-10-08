@@ -4,6 +4,9 @@
 Yeh guide Windows PC par chalne wale UVD backend ko Android app se connect aur test karne ke liye hai.
 Sirf us video ko test/download karein jiske liye aap ke paas ijazat ho.
 
+Railway deployment note: project ka root Dockerfile FFmpeg install karta hai. Railway
+par image rebuild/redeploy hone ke baad video + audio merge download kaam karna chahiye.
+
 1. PC par backend start karein
 ------------------------------
 PowerShell kholen aur poori command ek hi line mein chalayein:
